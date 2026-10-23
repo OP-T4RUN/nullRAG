@@ -17,3 +17,5 @@ storage/
 *.sqlite3
 logs/
 .DS_Store
+Train/
+*.zip

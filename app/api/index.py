@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import zipfile
 from pathlib import Path
@@ -106,6 +107,15 @@ async def index_documents(
             if rel_type == "exact_duplicate":
                 # Skip duplicate chunks to avoid index bloat
                 continue
+
+            # Save normalized parsed output for inspection and caching
+            parsed_out_dir = settings.STORAGE_DIR / "parsed" / collection_name
+            parsed_out_dir.mkdir(parents=True, exist_ok=True)
+            with open(parsed_out_dir / f"{doc_id}.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "passport": passport.model_dump(),
+                    "segments": [s.model_dump() for s in segments]
+                }, f, indent=2)
 
             duplicate_detector.register_passport(passport)
 
