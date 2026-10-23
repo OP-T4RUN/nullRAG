@@ -1,7 +1,7 @@
 import os
 import json
 import httpx
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from app.config import settings
 from app.schemas.api_models import ChunkCitation
 from app.schemas.internal_models import EvidenceObligation
@@ -19,7 +19,8 @@ class AnswerGenerator:
         self,
         query: str,
         evidence_chunks: List[Dict[str, Any]],
-        obligations: List[EvidenceObligation]
+        obligations: List[EvidenceObligation],
+        consistency_report: Optional[Dict[str, Any]] = None
     ) -> Tuple[str, List[ChunkCitation], Dict[str, Any]]:
         # Format citations
         citations: List[ChunkCitation] = []
@@ -46,12 +47,15 @@ class AnswerGenerator:
         formatted_context = "\n\n---\n\n".join(context_blocks)
         
         # Build prompt
-        prompt = self._build_prompt(query, formatted_context, obligations)
+        prompt = self._build_prompt(query, formatted_context, obligations, consistency_report)
         
         # Call LLM or deterministic fallback
         if settings.LLM_API_KEY:
             try:
                 answer, usage = await self._call_llm(prompt)
+                from app.generation.validation import claim_validator
+                val_res = claim_validator.validate_answer(answer, evidence_chunks, obligations)
+                usage["validation"] = val_res
                 return answer, citations, usage
             except Exception as e:
                 # Fallback to structured grounded extractive synthesis
@@ -61,19 +65,34 @@ class AnswerGenerator:
             answer = self._generate_extractive_fallback(query, evidence_chunks, obligations)
             return answer, citations, {"tokens": 0, "cost_usd": 0.0, "note": "Local extractive fallback"}
 
-    def _build_prompt(self, query: str, context: str, obligations: List[EvidenceObligation]) -> str:
-        obligations_text = "\n".join([f"- {o.description} (Status: {o.coverage_status})" for o in obligations])
-        
+    def _build_prompt(
+        self,
+        query: str,
+        context: str,
+        obligations: List[EvidenceObligation],
+        consistency_report: Optional[Dict[str, Any]] = None
+    ) -> str:
+        obligations_lines = []
+        for o in obligations:
+            status_desc = f"Status: {o.status}" if hasattr(o, "status") else f"Coverage: {o.coverage_status}"
+            obligations_lines.append(f"- {o.description} ({status_desc})")
+        obligations_text = "\n".join(obligations_lines)
+
+        consistency_guidance = ""
+        if consistency_report and consistency_report.get("scope_differentiations"):
+            notes = [d["note"] for d in consistency_report["scope_differentiations"]]
+            consistency_guidance = f"\nAccounting & Scope Distinctions to Respect:\n" + "\n".join([f"- {n}" for n in notes]) + "\n"
+
         return f"""You are a high-precision financial research assistant.
 Answer the user's question completely and truthfully, using ONLY the verified evidence provided below.
 
 Strict Instructions:
 1. Every factual statement must be supported by the provided text. Cite the document ID and page number in brackets, e.g. [Document A, Page 12].
-2. Do not mix reporting years or scopes (e.g. do not confuse FY2024 with FY2025, or consolidated figures with subsidiary figures).
+2. Do not mix reporting years or scopes (e.g. do not confuse FY2024 with FY2025, or consolidated figures with standalone/subsidiary figures).
 3. If information requested is missing or not provided in the text, explicitly state that it is not reported. Do not invent or extrapolate figures.
 4. Address each of the following required aspects:
 {obligations_text}
-
+{consistency_guidance}
 Evidence Context:
 {context}
 

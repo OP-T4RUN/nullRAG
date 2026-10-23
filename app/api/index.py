@@ -117,6 +117,20 @@ async def index_documents(
                     "segments": [s.model_dump() for s in segments]
                 }, f, indent=2)
 
+            # Extract & persist open-world metadata assertions in SQLite
+            try:
+                from app.knowledge import assertion_extractor, assertion_store, provenance_manager, RelationshipType
+                assertions = assertion_extractor.extract_assertions(passport, segments)
+                assertion_store.save_assertions(assertions)
+
+                if related_id:
+                    rel_type_enum = RelationshipType.SAME_REPORT_FAMILY if "family" in rel_type else RelationshipType.PREVIOUS_VERSION_OF
+                    provenance_manager.link_document_family(
+                        doc_id, related_id, rel_type_enum, {"detection": rel_type}
+                    )
+            except Exception:
+                pass
+
             duplicate_detector.register_passport(passport)
 
             # Structure-aware chunking

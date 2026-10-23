@@ -1,5 +1,5 @@
 from .api_models import TraceStep, ChunkCitation, IndexResponse, QueryRequest, QueryResponse
-from .internal_models import ParsedSegment, DocumentPassport, IndexedChunk, EvidenceObligation
+from .internal_models import ParsedSegment, DocumentPassport, IndexedChunk, EvidenceObligation, QueryPlan
 
 __all__ = [
     "TraceStep",
@@ -11,4 +11,5 @@ __all__ = [
     "DocumentPassport",
     "IndexedChunk",
     "EvidenceObligation",
+    "QueryPlan",
 ]
