@@ -17,10 +17,12 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
     RERANKER_MODEL: str = "BAAI/bge-reranker-base"
     
-    # LLM Settings (OpenAI / OpenCode compatible)
-    LLM_API_KEY: str = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+    # LLM Settings (OpenAI / OpenCode / Gemini compatible)
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    LLM_API_KEY: str = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", os.getenv("GEMINI_API_KEY", "")))
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.5-flash" if (os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY", "").startswith("AIzaSy")) else "gpt-4o-mini")
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini" if (os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY", "").startswith("AIzaSy")) else "openai")
     
     # Langfuse Observability
     LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")

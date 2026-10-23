@@ -83,6 +83,48 @@ Question:
 Answer:"""
 
     async def _call_llm(self, prompt: str) -> Tuple[str, Dict[str, Any]]:
+        # If Gemini key or provider
+        if settings.LLM_PROVIDER == "gemini" or settings.LLM_API_KEY.startswith("AIzaSy"):
+            return await self._call_gemini(prompt)
+        else:
+            return await self._call_openai_compatible(prompt)
+
+    async def _call_gemini(self, prompt: str) -> Tuple[str, Dict[str, Any]]:
+        import asyncio
+        from google import genai
+
+        api_key = settings.GEMINI_API_KEY or settings.LLM_API_KEY
+        client = genai.Client(api_key=api_key)
+        
+        # Run sync client in async threadpool to keep FastAPI non-blocking
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=settings.LLM_MODEL,
+            contents=prompt,
+            config={"temperature": 0.0}
+        )
+
+        content = response.text or ""
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            prompt_tokens = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
+            completion_tokens = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
+            total_tokens = getattr(response.usage_metadata, "total_token_count", prompt_tokens + completion_tokens) or 0
+
+        # Gemini 3.5 Flash pricing: ~$0.075 / 1M prompt tokens, ~$0.30 / 1M candidate tokens
+        cost_usd = (prompt_tokens * 0.000000075) + (completion_tokens * 0.00000030)
+
+        return content, {
+            "total_tokens": total_tokens,
+            "cost_usd": cost_usd,
+            "provider": "gemini",
+            "model": settings.LLM_MODEL
+        }
+
+    async def _call_openai_compatible(self, prompt: str) -> Tuple[str, Dict[str, Any]]:
         headers = {
             "Authorization": f"Bearer {settings.LLM_API_KEY}",
             "Content-Type": "application/json"
@@ -108,12 +150,13 @@ Answer:"""
             completion_tokens = usage_data.get("completion_tokens", 0)
             total_tokens = usage_data.get("total_tokens", prompt_tokens + completion_tokens)
             
-            # Approximate cost calculation for gpt-4o-mini ($0.15/1M input, $0.60/1M output)
             cost_usd = (prompt_tokens * 0.00000015) + (completion_tokens * 0.00000060)
             
             return content, {
                 "total_tokens": total_tokens,
-                "cost_usd": cost_usd
+                "cost_usd": cost_usd,
+                "provider": "openai_compatible",
+                "model": settings.LLM_MODEL
             }
 
     def _generate_extractive_fallback(
