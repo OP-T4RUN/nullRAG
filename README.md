@@ -1,25 +1,12 @@
-# HierFinRAG: Hierarchical Multimodal RAG for Financial Document Understanding
+# NullRAG: Hierarchical Multimodal RAG for Financial Document Understanding
 
-This repository contains the official implementation of the paper:
-
-**HierFinRAG—Hierarchical Multimodal RAG for Financial Document Understanding**
-
-**Quang-Vinh Dang**<sup>1,*</sup>, **Ngoc-Son-An Nguyen**<sup>2</sup>, and **Thi-Bich-Diem Vo**<sup>3</sup>
-
-<sup>1</sup> School of Innovation and Computing Technology, British University Vietnam, Hung Yen 16000, Vietnam  
-<sup>2</sup> Faculty of Information Technology, Industrial University of Ho Chi Minh City, Ho Chi Minh City 70000, Vietnam  
-<sup>3</sup> GiaoHangNhanh, Ho Chi Minh City 70000, Vietnam
-
-\* Author to whom correspondence should be addressed.
-
-**Informatics 2026, 13(2), 30;**  
-[https://doi.org/10.3390/informatics13020030](https://doi.org/10.3390/informatics13020030)
+**NullRAG—Hierarchical Multimodal RAG for Financial Document Understanding**
 
 ---
 
 ## Overview
 
-HierFinRAG is a specialized Retrieval-Augmented Generation (RAG) framework designed for complex financial documents. It addresses the challenges of tabular data, cross-referencing, and long-range dependencies in financial reports (e.g., 10-Ks, Annual Reports) by introducing:
+NullRAG is a specialized Retrieval-Augmented Generation (RAG) framework designed for complex financial documents. It addresses the challenges of tabular data, cross-referencing, and long-range dependencies in financial reports (e.g., 10-Ks, Annual Reports) by introducing:
 
 1.  **Hierarchical Parsing**: Structured decomposition of documents into Sections, Paragraphs, Tables, and Cells.
 2.  **Table-Text Graph Neural Network (TTGNN)**: A graph-based module to capture relationships between textual content and tabular data.
@@ -31,8 +18,8 @@ Ensure you have Python 3.13+ installed.
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/vinhqdang/HierFinRAG---Hierarchical-Multimodal-RAG-for-Financial-Document-Understanding.git
-    cd HierFinRAG---Hierarchical-Multimodal-RAG-for-Financial-Document-Understanding
+    git clone https://github.com/vinhqdang/NullRAG.git
+    cd NullRAG
     ```
 
 2.  Install dependencies:
@@ -68,7 +55,7 @@ This will generate:
 
 ## Repository Structure
 
-- `hierfinrag/`: Core package containing the implementation.
+- `nullrag/` (also aliased as `hierfinrag/`): Core package containing the implementation.
   - `parsing/`: Document layout analysis and JSON parsing.
   - `graph/`: Graph construction and TTGNN model.
   - `reasoning/`: Symbolic execution and fusion logic.

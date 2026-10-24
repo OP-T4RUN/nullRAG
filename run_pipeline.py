@@ -1,106 +1,81 @@
 import os
 import sys
 import json
+import argparse
 import torch
-from hierfinrag.parsing.json_parser import JSONParser
-from hierfinrag.graph.builder import GraphBuilder
-from hierfinrag.graph.ttgnn import TTGNN
-from hierfinrag.reasoning.fusion import SymbolicNeuralFusion
+
+from nullrag.parsing.pdf_parser import PDFParser
+from nullrag.graph.builder import GraphBuilder
+from nullrag.graph.ttgnn import TTGNN
+from nullrag.retrieval.hierarchical import HierarchicalRetriever
+from nullrag.reasoning.fusion import SymbolicNeuralFusion
+from nullrag.generation.attribution import generate_answer_with_attribution
+
+def run_pdf_pipeline(pdf_path: str, query: str, max_pages: int = 15, provider: str = "auto", model: str = None):
+    print("=" * 60)
+    print(f"NullRAG Pipeline: Processing PDF '{os.path.basename(pdf_path)}'")
+    print("=" * 60)
+    
+    # 1. Parsing Phase
+    print(f"\n[Phase 1] Parsing PDF document (up to {max_pages} pages)...")
+    parser = PDFParser(max_pages=max_pages)
+    doc = parser.parse(pdf_path)
+    print(f" -> Parsed: {doc.title}")
+    print(f"    Sections:   {len(doc.sections)}")
+    print(f"    Paragraphs: {len(doc.paragraphs)}")
+    print(f"    Tables:     {len(doc.tables)}")
+
+    # 2. Graph Construction Phase
+    print("\n[Phase 2] Building Heterogeneous Table-Text Graph...")
+    builder = GraphBuilder()
+    graph = builder.build_graph(doc)
+    print(f" -> Graph Nodes: {graph.x.shape[0]} (embedding dim: {graph.x.shape[1]})")
+    print(f"    Graph Edges: {graph.edge_index.shape[1]}")
+
+    # 3. TTGNN Relational Message Passing
+    print("\n[Phase 3] Running TTGNN (Relational Graph Attention)...")
+    ttgnn = TTGNN(
+        input_dim=graph.x.shape[1], 
+        hidden_dim=128, 
+        num_layers=2, 
+        num_heads=4
+    )
+    ttgnn.eval()
+    with torch.no_grad():
+        node_embeddings = ttgnn(graph.x, graph.edge_index, graph.edge_attr, graph.node_types)
+    print(f" -> TTGNN contextual embeddings generated: {node_embeddings.shape}")
+
+    # 4. Hierarchical Hybrid Retrieval
+    print(f"\n[Phase 4] Hierarchical Retrieval for Query:\n    \"{query}\"")
+    retriever = HierarchicalRetriever(encoder=builder.encoder)
+    retrieved_contexts = retriever.retrieve_for_document(query, doc, top_sections=5, top_chunks=6)
+    print(f" -> Retrieved {len(retrieved_contexts)} candidate contexts (Paragraphs / Tables)")
+    for i, c in enumerate(retrieved_contexts[:3], 1):
+        snippet = c.get("text", "")[:120].replace("\n", " ")
+        print(f"    [{i}] (Type: {c.get('type')}, Score: {c.get('score', 0):.4f}) {snippet}...")
+
+    # 5. Symbolic-Neural Fusion & Generation
+    print("\n[Phase 5] Symbolic-Neural Fusion Reasoning & Answer Attribution...")
+    fusion_engine = SymbolicNeuralFusion(provider=provider, model=model)
+    result = generate_answer_with_attribution(query, retrieved_contexts, fusion_engine=fusion_engine)
+    
+    print("\n" + "=" * 60)
+    print(f"FINAL ANSWER (Provider: {result.get('provider', provider).upper()}, Mode: {result['mode'].upper()}, Confidence: {result['confidence']:.2f}):")
+    print("=" * 60)
+    print(result["answer_text"])
+    print("=" * 60)
+    return result
 
 def main():
-    print("Starting HierFinRAG Phase 1 Pipeline...")
-    
-    # 1. Create Mock Data
-    sample_data = {
-        "id": "doc_demo",
-        "title": "Annual Report 2023",
-        "sections": [
-            {
-                "id": "s1", "title": "Financial Highlights", "level": 1, 
-                "content_ids": ["p1", "t1"]
-            }
-        ],
-        "paragraphs": [
-            {"id": "p1", "text": "Net income increased by 15% due to strong sales growth as shown in Table 1.", "section_id": "s1"}
-        ],
-        "tables": [
-            {
-                "id": "t1", 
-                "caption": "Consolidated Statement of Income",
-                "col_headers": ["2022", "2023"],
-                "row_headers": ["Revenue", "Net Income"],
-                "cells": [
-                    {"row": 0, "col": 0, "value": "100M", "is_header": False},
-                    {"row": 0, "col": 1, "value": "120M", "is_header": False},
-                    {"row": 1, "col": 0, "value": "10M", "is_header": False},
-                    {"row": 1, "col": 1, "value": "11.5M", "is_header": False} # 15% of 10M is 1.5M increase -> 11.5M
-                ]
-            }
-        ]
-    }
-    
-    # Save mock data
-    os.makedirs("data", exist_ok=True)
-    mock_file = "data/mock_parsed.json"
-    with open(mock_file, 'w') as f:
-        json.dump(sample_data, f, indent=2)
-    print(f"Created mock data at {mock_file}")
-    
-    # 2. Parse Data
-    print("Parsing document...")
-    parser = JSONParser()
-    doc = parser.parse(mock_file)
-    print(f"Parsed Document: {doc.title}")
-    print(f" - {len(doc.sections)} Sections")
-    print(f" - {len(doc.paragraphs)} Paragraphs")
-    print(f" - {len(doc.tables)} Tables")
-    
-    # 3. Build Graph
-    print("Constructing Graph...")
-    builder = GraphBuilder(embedding_dim=128) # Smaller dim for demo
-    graph = builder.build_graph(doc)
-    
-    print("\n--- Graph Statistics ---")
-    print(f"Node Features: {graph.x.shape}")
-    print(f"Edge Index:    {graph.edge_index.shape}")
-    print(f"Edge Attr:     {graph.edge_attr.shape}")
-    print(f"Node Types:    {graph.node_types.unique(return_counts=True)}")
-    
-    
-    # 4. Initialize & Run TTGNN
-    print("\nInitializing TTGNN...")
-    # dimensions: input 128 (matches builder), hidden 64
-    model = TTGNN(input_dim=128, hidden_dim=64, num_layers=2)
-    model.eval()
-    
-    with torch.no_grad():
-        out_embeddings = model(
-            graph.x, 
-            graph.edge_index, 
-            graph.edge_attr, 
-            graph.node_types
-        )
-    
-    print(f"TTGNN Output Shape: {out_embeddings.shape}")
-    
-    # 5. Run Symbolic-Neural Fusion
-    print("\nTesting Symbolic-Neural Fusion...")
-    fusion_engine = SymbolicNeuralFusion(llm_client=None) # Mock LLM
-    
-    # Test Query 1: Symbolic
-    q1 = "Calculate the percentage growth in net income from 2022 to 2023"
-    print(f"Query: {q1}")
-    ans1 = fusion_engine(q1, [{"type": "Table"}, {"type": "Cell"}]) # Mock retrieval context
-    print(f"Result: {ans1}")
-    
-    # Test Query 2: Neural
-    q2 = "Summarize the financial highlights"
-    print(f"Query: {q2}")
-    ans2 = fusion_engine(q2, [{"type": "Section"}, {"type": "Paragraph"}])
-    print(f"Result: {ans2}")
+    parser = argparse.ArgumentParser(description="NullRAG End-to-End Pipeline")
+    parser.add_argument("--pdf", type=str, default="Train/Documents/fact-sheet-SUMMARY.pdf", help="Path to PDF file")
+    parser.add_argument("--query", type=str, default="What are the key capital requirements and risk-based metrics summarized?", help="Question")
+    parser.add_argument("--max_pages", type=int, default=10, help="Max pages to parse")
+    parser.add_argument("--provider", type=str, default="opencode", choices=["opencode", "openai", "extractive", "auto"])
+    parser.add_argument("--model", type=str, default=None, help="Model name (e.g. deepseek-v4.1-flash)")
+    args = parser.parse_args()
 
-    print("\nSUCCESS: Pipeline integration test passed.")
-
+    run_pdf_pipeline(args.pdf, args.query, max_pages=args.max_pages, provider=args.provider, model=args.model)
 
 if __name__ == "__main__":
     main()

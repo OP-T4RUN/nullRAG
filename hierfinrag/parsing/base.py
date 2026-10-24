@@ -17,6 +17,7 @@ class Table:
     cells: List[Cell]
     row_headers: List[str] = field(default_factory=list)
     col_headers: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     @property
     def num_rows(self) -> int:
@@ -32,6 +33,7 @@ class Paragraph:
     id: str
     text: str
     section_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class Section:
@@ -40,6 +42,7 @@ class Section:
     title: str
     level: int
     content_ids: List[str] = field(default_factory=list) # IDs of paragraphs/tables in this section
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class Document:
@@ -49,6 +52,7 @@ class Document:
     sections: List[Section] = field(default_factory=list)
     paragraphs: List[Paragraph] = field(default_factory=list)
     tables: List[Table] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     def get_paragraph(self, p_id: str) -> Optional[Paragraph]:
         for p in self.paragraphs:

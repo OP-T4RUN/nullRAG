@@ -2,6 +2,9 @@
 __pycache__/
 *.py[codz]
 *$py.class
+config.py
+results/
+
 
 # C extensions
 *.so
@@ -208,3 +211,11 @@ __marimo__/
 
 # Local configuration
 config.py
+
+# Large data files (exceed GitHub 100MB limit)
+Train/
+*.zip
+train_benchmark_core.zip
+train_docs_sample.zip
+train_documents.zip
+gammon_test.zip

@@ -1,155 +1,181 @@
-import torch
-import numpy as np
 import re
-from typing import List, Any
+import numpy as np
+import torch
+import torch.nn.functional as F
+from typing import List, Dict, Any, Optional, Tuple
+from rank_bm25 import BM25Okapi
+from ..parsing.base import Document, Section, Paragraph, Table, Cell
 
-# Placeholders for external models/utilities
-class MockEmbedModel:
-    def encode(self, text):
-        # Return random embedding or mock
-        if isinstance(text, list):
-            return np.random.rand(len(text), 1024)
-        return np.random.rand(1, 1024)
-
-embed_model = MockEmbedModel()
-
-def cosine_similarity(a, b):
-    # Mock cosine similarity
-    # a: [n, d], b: [m, d]
-    if isinstance(a, torch.Tensor):
-        a = a.detach().numpy()
-    if isinstance(b, torch.Tensor):
-        b = b.detach().numpy()
-    # Simplified
-    return np.dot(a, b.T)
-
-def reciprocal_rank_fusion(scores_list, k=60):
-    # Simplified RRF for 2 lists of scores (assuming they are ranks or we convert to ranks)
-    # The snippet implies we have `bm25_scores` and `dense_scores` which are raw scores.
-    # We should convert them to ranks first.
-    # Placeholder implementation
-    return np.array(scores_list[0]) + np.array(scores_list[1]) # Very naive
-
-def level1_retrieval(query_emb, section_embeddings, k=5):
+class HierarchicalRetriever:
     """
-    Args:
-        query_emb: Query embedding [1, d]
-        section_embeddings: All section embeddings [num_sections, d]
-        k: Number of sections to retrieve
-    
-    Returns:
-        top_k_sections: Indices of most relevant sections
+    Two-stage Hierarchical Retriever:
+    - Level 1: Dense Section retrieval via cosine similarity.
+    - Level 2: Hybrid Paragraph & Table retrieval using BM25 + Dense embeddings
+               fused with Reciprocal Rank Fusion (RRF).
     """
-    # Compute cosine similarity
-    if isinstance(query_emb, np.ndarray):
-        query_emb = torch.tensor(query_emb)
-    if isinstance(section_embeddings, np.ndarray):
-        section_embeddings = torch.tensor(section_embeddings)
+    def __init__(self, encoder=None, model_name="all-MiniLM-L6-v2"):
+        if encoder is not None:
+            self.encoder = encoder
+        else:
+            from sentence_transformers import SentenceTransformer
+            self.encoder = SentenceTransformer(model_name)
 
-    # Manual cosine sim if not normalized
-    # Assuming normalized for dot product
-    similarities = torch.mm(query_emb, section_embeddings.t())
-    
-    # Get top-k sections
-    top_k_indices = torch.topk(similarities, k=k).indices
-    
-    return top_k_indices
+    def encode(self, texts: List[str]) -> torch.Tensor:
+        if isinstance(texts, str):
+            texts = [texts]
+        embs = self.encoder.encode(texts, convert_to_tensor=True, show_progress_bar=False)
+        return embs.detach().cpu()
 
-def level2_retrieval(query, section_nodes, bm25_retriever, k=10):
-    """
-    Args:
-        query: Query text
-        section_nodes: List of [Paragraph, Table] nodes in selected sections
-        k: Number of elements to retrieve
-    
-    Returns:
-        top_k_elements: Most relevant paragraphs/tables
-    """
-    # Sparse retrieval (BM25)
-    # bm25_scores = bm25_retriever.score(query, section_nodes)
-    bm25_scores = np.random.rand(len(section_nodes)) # Placeholder
-    
-    # Dense retrieval (embedding similarity)
-    # query_emb = embed_model.encode(query)
-    # dense_scores = cosine_similarity(query_emb, [n.embedding for n in section_nodes])
-    dense_scores = np.random.rand(len(section_nodes)) # Placeholder
-    
-    # Reciprocal Rank Fusion
-    # combined_scores = reciprocal_rank_fusion(bm25_scores, dense_scores)
-    combined_scores = bm25_scores + dense_scores # Placeholder
-    
-    # Get top-k
-    top_k_indices = np.argsort(combined_scores)[-k:][::-1]
-    
-    return [section_nodes[i] for i in top_k_indices]
+    def level1_section_retrieval(
+        self, 
+        query: str, 
+        sections: List[Section], 
+        top_k: int = 15
+    ) -> List[Section]:
+        """
+        Retrieves top-k most relevant sections for a query using section titles & descriptions.
+        """
+        if not sections:
+            return []
+        if len(sections) <= top_k:
+            return sections
 
-def select_relevant_rows(query, table, top_k=5):
-    """
-    Args:
-        query: Query text
-        table: Table object with rows
-        top_k: Number of rows to select
-    
-    Returns:
-        relevant_rows: Top-k rows by relevance
-    """
-    row_representations = []
-    for row in table.rows:
-        # Concatenate row header + all cell values
-        # assuming row.cells is list of objects with .value
-        # and row.header is string.
-        cell_values = [getattr(c, 'value', str(c)) for c in row.cells]
-        row_text = str(row.header) + " " + " ".join(cell_values)
-        row_representations.append(row_text)
-    
-    # Embed and compute similarity
-    query_emb = embed_model.encode(query)
-    row_embs = embed_model.encode(row_representations)
-    similarities = cosine_similarity(query_emb, row_embs)
-    
-    top_k_indices = np.argsort(similarities.flatten())[-top_k:][::-1]
-    return [table.rows[i] for i in top_k_indices]
+        section_texts = [f"{s.title}" for s in sections]
+        query_emb = self.encode([query]) # [1, d]
+        sec_embs = self.encode(section_texts) # [N, d]
 
-def select_relevant_columns(query, table, intent):
-    """
-    Args:
-        query: Query text
-        table: Table object
-        intent: Financial intent (helps identify column type)
-    
-    Returns:
-        relevant_columns: Columns likely to contain answer
-    """
-    if intent == "Numerical":
-        # For specific year mentions, select that year's column
-        year_match = re.search(r'(20\d{2})', query)
-        if year_match:
-            year = year_match.group(1)
-            # Assuming table.columns is list of objects with .header
-            matching_cols = [col for col in table.columns if year in col.header]
-            if matching_cols:
-                return matching_cols
+        cos_sim = F.cosine_similarity(query_emb, sec_embs).numpy()
+        top_indices = np.argsort(cos_sim)[-top_k:][::-1]
+        return [sections[i] for i in top_indices]
+
+    def level2_hybrid_retrieval(
+        self,
+        query: str,
+        candidate_items: List[Dict[str, Any]],
+        top_k: int = 8,
+        rrf_k: int = 60
+    ) -> List[Dict[str, Any]]:
+        """
+        Hybrid retrieval combining BM25 (lexical) and Dense cosine similarity (semantic)
+        via Reciprocal Rank Fusion (RRF).
         
-        # Otherwise, select most recent period columns
-        return table.get_latest_period_columns()
-    
-    elif intent == "Comparison":
-        # Select multiple period columns
-        return table.get_time_series_columns()
-    
-    else:
-        # Default: all columns
-        return table.columns
+        candidate_items: list of dicts with at least 'text' and 'id'.
+        """
+        if not candidate_items:
+            return []
+        if len(candidate_items) <= top_k:
+            return candidate_items
 
-def extract_answer_cells(relevant_rows, relevant_columns, table):
-    """
-    Returns:
-        cells: Intersection of relevant rows and columns
-    """
-    cells = []
-    for row in relevant_rows:
-        for col in relevant_columns:
-            cell = table.get_cell(row.index, col.index)
-            cells.append(cell)
-    
-    return cells
+        corpus_texts = [item.get("text", "") for item in candidate_items]
+        
+        # 1. Sparse BM25
+        tokenized_corpus = [
+            re.findall(r"\w+", text.lower()) for text in corpus_texts
+        ]
+        # Avoid empty tokens
+        tokenized_corpus = [t if t else ["empty"] for t in tokenized_corpus]
+        bm25 = BM25Okapi(tokenized_corpus)
+        query_tokens = re.findall(r"\w+", query.lower()) or ["empty"]
+        bm25_scores = bm25.get_scores(query_tokens)
+        bm25_ranking = np.argsort(bm25_scores)[::-1]
+        bm25_ranks = {idx: rank for rank, idx in enumerate(bm25_ranking)}
+
+        # 2. Dense Similarity
+        query_emb = self.encode([query])
+        corpus_embs = self.encode(corpus_texts)
+        dense_scores = F.cosine_similarity(query_emb, corpus_embs).numpy()
+        dense_ranking = np.argsort(dense_scores)[::-1]
+        dense_ranks = {idx: rank for rank, idx in enumerate(dense_ranking)}
+
+        # 3. Reciprocal Rank Fusion
+        rrf_scores = {}
+        for idx in range(len(candidate_items)):
+            r_bm25 = bm25_ranks[idx]
+            r_dense = dense_ranks[idx]
+            rrf_scores[idx] = (1.0 / (rrf_k + r_bm25)) + (1.0 / (rrf_k + r_dense))
+
+        top_indices = sorted(rrf_scores.keys(), key=lambda i: rrf_scores[i], reverse=True)[:top_k]
+        
+        results = []
+        for idx in top_indices:
+            res_item = dict(candidate_items[idx])
+            res_item["score"] = float(rrf_scores[idx])
+            results.append(res_item)
+        return results
+
+    def retrieve_for_document(
+        self, 
+        query: str, 
+        doc: Document, 
+        top_sections: int = 15, 
+        top_chunks: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        End-to-end two-stage retrieval on a parsed Document.
+        """
+        # Step 1: Filter to top sections if document has multiple sections
+        if len(doc.sections) > top_sections:
+            selected_sections = self.level1_section_retrieval(query, doc.sections, top_k=top_sections)
+            allowed_content_ids = set()
+            for s in selected_sections:
+                allowed_content_ids.update(s.content_ids)
+        else:
+            allowed_content_ids = None
+
+        # Step 2: Build candidate items from paragraphs and tables
+        candidates = []
+        for p in doc.paragraphs:
+            if allowed_content_ids is None or p.id in allowed_content_ids:
+                candidates.append({
+                    "id": p.id,
+                    "type": "paragraph",
+                    "text": p.text,
+                    "metadata": p.metadata,
+                    "document": doc.title
+                })
+                
+        for t in doc.tables:
+            if allowed_content_ids is None or t.id in allowed_content_ids:
+                # Format table content as readable markdown
+                table_str = self._format_table_markdown(t)
+                candidates.append({
+                    "id": t.id,
+                    "type": "table",
+                    "text": table_str,
+                    "metadata": t.metadata,
+                    "document": doc.title
+                })
+
+        # Fallback if section filtering was too aggressive
+        if not candidates:
+            for p in doc.paragraphs:
+                candidates.append({
+                    "id": p.id, "type": "paragraph", "text": p.text, "metadata": p.metadata, "document": doc.title
+                })
+            for t in doc.tables:
+                candidates.append({
+                    "id": t.id, "type": "table", "text": self._format_table_markdown(t), "metadata": t.metadata, "document": doc.title
+                })
+
+        # Step 3: Run Level 2 Hybrid Retrieval
+        return self.level2_hybrid_retrieval(query, candidates, top_k=top_chunks)
+
+    def _format_table_markdown(self, table: Table) -> str:
+        if not table.cells:
+            return table.caption or "Empty Table"
+        
+        num_rows = table.num_rows
+        num_cols = table.num_cols
+        grid = [["" for _ in range(num_cols)] for _ in range(num_rows)]
+        for cell in table.cells:
+            if cell.row_idx < num_rows and cell.col_idx < num_cols:
+                grid[cell.row_idx][cell.col_idx] = cell.value
+
+        md_lines = []
+        if table.caption:
+            md_lines.append(f"### {table.caption}")
+        for r_idx, row in enumerate(grid):
+            md_lines.append("| " + " | ".join(row) + " |")
+            if r_idx == 0:
+                md_lines.append("| " + " | ".join(["---"] * num_cols) + " |")
+        return "\n".join(md_lines)
